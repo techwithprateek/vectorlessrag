@@ -73,8 +73,11 @@ def decompose_query(user_query: str) -> dict:
         # Parse the JSON string into a Python dict
         return json.loads(cleaned)
 
-    except (json.JSONDecodeError, Exception):
-        # If JSON parsing fails (LLM hallucinated non-JSON), return a safe
-        # fallback so the rest of the pipeline can still run without crashing
-        print(f"[decomposer] Warning: failed to parse LLM response as JSON. Using defaults.")
+    except json.JSONDecodeError:
+        # If the LLM returned non-JSON (hallucinated text, markdown, etc.),
+        # fall back to safe defaults so the rest of the pipeline can still run.
+        print("[decomposer] Warning: LLM response was not valid JSON. Using defaults.")
         return dict(_DEFAULT_RESULT)
+    # All other exceptions (network errors, invalid API keys, provider outages,
+    # etc.) are intentionally left to propagate so that configuration and
+    # runtime problems are visible rather than silently swallowed.
