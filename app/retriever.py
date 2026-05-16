@@ -81,18 +81,16 @@ def retrieve(structured_query: dict, top_k: int = 5) -> list[dict]:
             conditions.append("in_stock = true")  # no param needed — it's a literal
 
         # --- Step 3: Full-text search condition ---
-        # Convert the space-separated terms into a PostgreSQL tsquery:
-        # "waterproof bass" → "waterproof & bass" (AND logic)
+        # Use plainto_tsquery for raw user text so hyphenated/quoted input
+        # is parsed safely instead of raising tsquery syntax errors.
         if all_terms:
-            # Replace multiple spaces with single space, then join with &
-            tsquery_str = " & ".join(all_terms.split())
             # search_vector is a pre-built tsvector column; @@ tests if it matches
-            conditions.append("search_vector @@ to_tsquery('english', %s)")
-            params.append(tsquery_str)
+            conditions.append("search_vector @@ plainto_tsquery('english', %s)")
+            params.append(all_terms)
             # ts_rank scores how well the document matches the query (higher = better)
-            order_clause = "ORDER BY ts_rank(search_vector, to_tsquery('english', %s)) DESC, rating DESC"
-            # We need to pass the tsquery string again as a param for the ORDER BY
-            order_params = [tsquery_str]
+            order_clause = "ORDER BY ts_rank(search_vector, plainto_tsquery('english', %s)) DESC, rating DESC"
+            # Pass the same plain-text search string again for ranking
+            order_params = [all_terms]
         else:
             # No keywords? Fall back to sorting by rating alone
             order_clause = "ORDER BY rating DESC"
