@@ -46,74 +46,90 @@ def retrieve(structured_query: dict, top_k: int = 5) -> list[dict]:
         # Combine both for a richer full-text search
         all_terms = f"{keywords} {attributes}".strip()
 
-        # --- Step 2: Build dynamic WHERE clause ---
-        # Start with "1=1" so the clause is always syntactically valid
-        # even if no filters are applied
-        conditions = ["1=1"]
-        params = []  # positional params for %s placeholders in psycopg2
-
-        # Category: partial match (ILIKE) so "speaker" matches "bluetooth speaker"
+        # --- Step 2: Build filters as (tag, sql_snippet, param_or_None) triples ---
+        # Using triples lets us easily drop individual filters (e.g. category)
+        # without misaligning positional params later.
         category = structured_query.get("category")
-        if category:
-            conditions.append("category ILIKE %s")
-            params.append(f"%{category}%")
-
-        # Price ceiling filter
         price_max = structured_query.get("price_max")
-        if price_max is not None:
-            conditions.append("price <= %s")
-            params.append(price_max)
-
-        # Price floor filter
         price_min = structured_query.get("price_min")
-        if price_min is not None:
-            conditions.append("price >= %s")
-            params.append(price_min)
-
-        # Minimum rating filter
         min_rating = structured_query.get("min_rating")
+
+        # Each entry: (tag, condition_sql, param_value | None)
+        # tag is used to identify which filter to drop in fallback attempts
+        filter_specs = [("base", "1=1", None)]
+        if category:
+            filter_specs.append(("category", "category ILIKE %s", f"%{category}%"))
+        if price_max is not None:
+            filter_specs.append(("price_max", "price <= %s", price_max))
+        if price_min is not None:
+            filter_specs.append(("price_min", "price >= %s", price_min))
         if min_rating is not None:
-            conditions.append("rating >= %s")
-            params.append(min_rating)
-
-        # Stock filter: only show available products if requested
+            filter_specs.append(("rating", "rating >= %s", min_rating))
         if structured_query.get("in_stock_only"):
-            conditions.append("in_stock = true")  # no param needed — it's a literal
+            filter_specs.append(("stock", "in_stock = true", None))
 
-        # --- Step 3: Full-text search condition ---
-        # Use plainto_tsquery for raw user text so hyphenated/quoted input
-        # is parsed safely instead of raising tsquery syntax errors.
-        if all_terms:
-            # search_vector is a pre-built tsvector column; @@ tests if it matches
-            conditions.append("search_vector @@ plainto_tsquery('english', %s)")
-            params.append(all_terms)
-            # ts_rank scores how well the document matches the query (higher = better)
-            order_clause = "ORDER BY ts_rank(search_vector, plainto_tsquery('english', %s)) DESC, rating DESC"
-            # Pass the same plain-text search string again for ranking
-            order_params = [all_terms]
-        else:
-            # No keywords? Fall back to sorting by rating alone
-            order_clause = "ORDER BY rating DESC"
-            order_params = []
+        def build_query(specs, include_fts: bool):
+            """Assemble conditions + params from a list of filter specs.
 
-        # --- Step 4: Assemble and execute the full query ---
-        where_clause = " AND ".join(conditions)
-        sql = f"""
-            SELECT id, name, brand, category, price, rating,
-                   in_stock, tags, description
-            FROM products
-            WHERE {where_clause}
-            {order_clause}
-            LIMIT %s
-        """
-        # Final params: WHERE params + ORDER BY params + LIMIT value
-        all_params = params + order_params + [top_k]
+            Args:
+                specs: List of (tag, sql, param_or_None) triples.
+                include_fts: If True, appends the FTS condition on all_terms.
 
-        cursor.execute(sql, all_params)
-        results = cursor.fetchall()
+            Returns:
+                (conditions_list, params_list, order_clause, order_params_list)
+            """
+            conds = [sql for _, sql, _ in specs]
+            prms  = [p   for _, _,   p in specs if p is not None]
+            if include_fts and all_terms:
+                conds.append("search_vector @@ plainto_tsquery('english', %s)")
+                prms.append(all_terms)
+                order = "ORDER BY ts_rank(search_vector, plainto_tsquery('english', %s)) DESC, rating DESC"
+                ord_p = [all_terms]
+            else:
+                order = "ORDER BY rating DESC"
+                ord_p = []
+            return conds, prms, order, ord_p
 
-        # Convert RealDictRow objects to plain Python dicts for JSON safety
-        return [dict(row) for row in results]
+        def run_query(conds, qparams, order, order_params):
+            """Execute the assembled SQL and return rows as plain dicts."""
+            where = " AND ".join(conds)
+            sql = f"""
+                SELECT id, name, brand, category, price, rating,
+                       in_stock, tags, description
+                FROM products
+                WHERE {where}
+                {order}
+                LIMIT %s
+            """
+            cursor.execute(sql, qparams + order_params + [top_k])
+            return [dict(row) for row in cursor.fetchall()]
+
+        # --- Step 3: Try queries in order of strictness, falling back on each miss ---
+
+        # Attempt 1: all SQL filters + FTS
+        conds, prms, order, ord_p = build_query(filter_specs, include_fts=True)
+        results = run_query(conds, prms, order, ord_p)
+
+        if not results and all_terms:
+            # FTS terms not found in search_vector (e.g. LLM included adjectives
+            # like "good" that aren't indexed). Drop FTS, keep SQL filters.
+            print("[retriever] FTS returned 0 — retrying with SQL filters only.")
+            conds, prms, order, ord_p = build_query(filter_specs, include_fts=False)
+            results = run_query(conds, prms, order, ord_p)
+
+        if not results and category:
+            # Category label from LLM doesn't match catalog (e.g. "earphones" vs
+            # "headphones"). Drop category filter and retry with FTS + other filters.
+            print("[retriever] Category filter matched nothing — dropping category and retrying.")
+            no_cat = [s for s in filter_specs if s[0] != "category"]
+            conds, prms, order, ord_p = build_query(no_cat, include_fts=bool(all_terms))
+            results = run_query(conds, prms, order, ord_p)
+            if not results and all_terms:
+                # Still nothing — also drop FTS
+                conds, prms, order, ord_p = build_query(no_cat, include_fts=False)
+                results = run_query(conds, prms, order, ord_p)
+
+        return results
 
     finally:
         # Always close the cursor and connection, even if an exception occurred
