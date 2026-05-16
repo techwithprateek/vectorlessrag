@@ -333,7 +333,7 @@ Before you begin, make sure you have:
 
 ```bash
 git clone https://github.com/your-username/vectorlessrag.git
-cd vectorlessrag/shopsense
+cd vectorlessrag
 ```
 
 ### 2. Install Python dependencies
