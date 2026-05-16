@@ -49,19 +49,19 @@ with st.sidebar:
     ]
 
     for example in example_queries:
-        # Each button click stores the example text so the input is pre-filled
+        # Each button click writes directly into the text input's own session-state
+        # key so Streamlit updates the widget regardless of prior user input.
         if st.button(example, use_container_width=True):
-            st.session_state["query"] = example
-            st.rerun()  # Rerun to update the text input widget with the new value
+            st.session_state["query_input"] = example
+            st.rerun()
 
 # --- Main area ---
 st.title("🛍️ ShopSense")
 st.caption("Natural language product search — powered by LLM + PostgreSQL full-text search")
 
-# Text input — pre-filled from session_state if an example was clicked
+# Text input — the key "query_input" is the single source of truth for its value
 query = st.text_input(
     "What are you looking for?",
-    value=st.session_state.get("query", ""),
     placeholder="e.g. waterproof bluetooth speaker under ₹2000 with good bass",
     key="query_input",
 )
