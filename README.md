@@ -329,6 +329,42 @@ Before you begin, make sure you have:
 
 ## 🚀 Setup Steps
 
+### 0. 🐘 Install & Start PostgreSQL
+
+Skip this step if PostgreSQL 13+ is already running on your machine.
+
+**macOS (Homebrew):**
+```bash
+brew install postgresql@16
+brew services start postgresql@16
+# Verify it's running:
+pg_isready   # should print "/tmp:5432 - accepting connections"
+```
+
+**Ubuntu / Debian:**
+```bash
+sudo apt update && sudo apt install -y postgresql postgresql-contrib
+sudo systemctl start postgresql
+sudo systemctl enable postgresql   # auto-start on reboot
+```
+
+**Windows:**
+Download and run the installer from [postgresql.org/download/windows](https://www.postgresql.org/download/windows/). During setup, note the port (default: 5432) and the password you set for the `postgres` user — you'll need both for the `DATABASE_URL` in `.env`.
+
+**Verify the connection:**
+```bash
+psql -U postgres -c "SELECT version();"
+# PostgreSQL 16.x ...
+```
+
+> 💡 **macOS tip:** Add PostgreSQL to your PATH so `psql` and `createdb` are available:
+> ```bash
+> echo 'export PATH="/opt/homebrew/opt/postgresql@16/bin:$PATH"' >> ~/.zshrc
+> source ~/.zshrc
+> ```
+
+---
+
 ### 1. Clone the repository
 
 ```bash
