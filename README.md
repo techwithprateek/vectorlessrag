@@ -570,7 +570,7 @@ The `'english'` configuration applies **🌿 stemming** (e.g. "running" → "run
 → Run `pip install -r requirements.txt` inside your virtual environment
 
 **🤖 LLM returns non-JSON / decomposer fails**
-→ The decomposer catches JSON parse errors and returns a safe empty dict. The pipeline will still run with no filters applied (returns top-rated products).
+→ If the decomposer cannot parse the LLM response as JSON or hits another error during decomposition, it falls back to a safe empty dict. The pipeline will still run with no filters applied (returns top-rated products).
 
 **🔍 No products returned**
 → Try a broader query. Check that `python db/seed.py` ran successfully and that the DB has 10 rows: `psql shopsense -c "SELECT COUNT(*) FROM products;"`
